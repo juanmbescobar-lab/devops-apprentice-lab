@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build-and-smoke-test:
@@ -16,7 +16,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Crea el .env que necesita Compose en el runner
+      # Crea el .env que necesita Compose en el runner de CI
       - name: Create local env file for CI
         run: |
           mkdir -p infra/local
@@ -27,9 +27,24 @@ jobs:
           REDIS_URL=redis://redis:6379/0
           EOF
 
-      - name: Build images and start stack
+      # Valida que el compose es correcto y que las variables existen
+      - name: Validate docker compose config
         run: |
-          docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env up -d --build
+          docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env config -q
+
+      # Build de imágenes usando Bake + cache persistente (GitHub Actions cache backend)
+      - name: Build images with cache (Bake)
+        uses: docker/bake-action@v5
+        with:
+          files: docker-bake.hcl
+          set: |
+            *.cache-from=type=gha
+            *.cache-to=type=gha,mode=max
+
+      # Smoke test: levantar stack (sin --build) y validar /health
+      - name: Start stack (no build)
+        run: |
+          docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env up -d
 
       - name: Show compose status
         run: |
@@ -37,7 +52,6 @@ jobs:
 
       - name: Wait for API health
         run: |
-          # Espera hasta ~60s a que /health responda
           for i in {1..30}; do
             if curl -fsS http://localhost:8000/health > /dev/null; then
               echo "API is healthy"
@@ -50,6 +64,16 @@ jobs:
           echo "API did not become healthy in time"
           docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env logs --tail=200
           exit 1
+
+      # Scan (reporte) - no rompe el build todavía
+      - name: Scan images with Trivy (report only)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: |
+            devops-apprentice-lab-api:ci
+            devops-apprentice-lab-worker:ci
+          format: table
+          exit-code: 0
 
       - name: Tear down
         if: always()
