@@ -68,7 +68,10 @@ jobs:
 
       - name: Start stack (no build)
         run: |
-          docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env up -d
+          docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env up -d --no-build
+        env:
+          API_IMAGE: devops-apprentice-lab-api:ci
+          WORKER_IMAGE: devops-apprentice-lab-worker:ci  
 
       - name: Show compose status
         run: |
