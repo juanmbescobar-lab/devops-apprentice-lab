@@ -28,7 +28,7 @@ services:
       - lab-net
 
   api:
-    image: ${API_IMAGE:-}
+    image: ${API_IMAGE:-devops-apprentice-lab-api:latest}
     build:
       context: ../../apps/api
     environment:
@@ -49,7 +49,7 @@ services:
       - lab-net
 
   worker:
-    image: ${WORKER_IMAGE:-}
+    image: ${WORKER_IMAGE:--devops-apprentice-lab-worker:latest}
     build:
       context: ../../apps/worker
     environment:
