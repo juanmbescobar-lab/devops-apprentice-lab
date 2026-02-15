@@ -28,6 +28,7 @@ services:
       - lab-net
 
   api:
+    image: ${API_IMAGE:-}
     build:
       context: ../../apps/api
     environment:
@@ -48,6 +49,7 @@ services:
       - lab-net
 
   worker:
+    image: ${WORKER_IMAGE:-}
     build:
       context: ../../apps/worker
     environment:

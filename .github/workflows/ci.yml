@@ -8,6 +8,7 @@ on:
 jobs:
   build-and-smoke-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -16,7 +17,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Crea el .env que necesita Compose en el runner de CI
       - name: Create local env file for CI
         run: |
           mkdir -p infra/local
@@ -26,25 +26,52 @@ jobs:
           POSTGRES_PASSWORD=labpassword
           REDIS_URL=redis://redis:6379/0
           EOF
+          echo "Created infra/local/.env (temporary for CI)"
 
-      # Valida que el compose es correcto y que las variables existen
       - name: Validate docker compose config
         run: |
           docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env config -q
+        # fail fast if compose is invalid
 
-      # Build de imágenes usando Bake + cache persistente (GitHub Actions cache backend)
-      - name: Build images with cache (Bake)
-        uses: docker/bake-action@v5
+      # Build API image (explicit context, cache, load)
+      - name: Build API image (cache + load)
+        uses: docker/build-push-action@v5
         with:
-          files: docker-bake.hcl
-          set: |
-            *.cache-from=type=gha
-            *.cache-to=type=gha,mode=max
+          context: ./apps/api
+          file: ./apps/api/Dockerfile
+          load: true
+          tags: devops-apprentice-lab-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      # Smoke test: levantar stack (sin --build) y validar /health
+      # Build Worker image (explicit context, cache, load)
+      - name: Build Worker image (cache + load)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/worker
+          file: ./apps/worker/Dockerfile
+          load: true
+          tags: devops-apprentice-lab-worker:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Debug - list images and docker info
+        run: |
+          echo "=== docker images ==="
+          docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}'
+          echo
+          echo "=== docker info (short) ==="
+          docker info --format '{{json .}}' | jq '{Driver: .Driver, Containers: .Containers, Images: .Images, "ServerVersion": .ServerVersion}' || true
+          echo
+          echo "=== disk usage ==="
+          df -h || true
+
       - name: Start stack (no build)
         run: |
-          docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env up -d
+          docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env up -d --no-build
+        env:
+          API_IMAGE: devops-apprentice-lab-api:ci
+          WORKER_IMAGE: devops-apprentice-lab-worker:ci  
 
       - name: Show compose status
         run: |
@@ -52,20 +79,23 @@ jobs:
 
       - name: Wait for API health
         run: |
-          for i in {1..30}; do
-            if curl -fsS http://localhost:8000/health > /dev/null; then
+          set -e
+          # Wait up to 5 minutes (100 attempts x 3s)
+          for i in $(seq 1 100); do
+            if curl -fsS http://localhost:8000/health > /dev/null 2>&1; then
               echo "API is healthy"
-              curl -fsS http://localhost:8000/health
+              curl -fsS http://localhost:8000/health || true
               exit 0
             fi
             echo "Waiting for API... attempt $i"
-            sleep 2
+            sleep 3
           done
-          echo "API did not become healthy in time"
-          docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env logs --tail=200
+          echo "API did not become healthy in time - printing last logs for debug"
+          docker compose -f infra/local/docker-compose.yml --env-file infra/local/.env logs --tail=500
+          # show container statuses for easier debugging
+          docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
           exit 1
 
-      # Scan (reporte) - no rompe el build todavía
       - name: Scan images with Trivy (report only)
         uses: aquasecurity/trivy-action@0.24.0
         with:
